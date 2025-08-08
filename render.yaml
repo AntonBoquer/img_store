@@ -1,17 +1,17 @@
 services:
   - type: web
-    name: fastapi-app
-    runtime: python
+    name: image-store-api
+    env: python
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 10000
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DB_NAME
-        sync: false
+        value: postgres
       - key: DB_USER
-        sync: false
+        value: postgres
       - key: DB_PASS
-        sync: false
+        sync: false  # Set this in Render dashboard
       - key: DB_HOST
-        sync: false
+        sync: false  # Set this in Render dashboard
       - key: DB_PORT
-        sync: false
+        value: 5432
