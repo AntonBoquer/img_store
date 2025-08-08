@@ -1,3 +1,0 @@
-[tool.poetry.dependencies]
-python = "3.11.9"
-pydantic = "1.10.8"
