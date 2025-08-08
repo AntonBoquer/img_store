@@ -7,7 +7,7 @@ import os
 import json
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
 import aiofiles
 import shutil
 from pathlib import Path
@@ -38,15 +38,24 @@ class ImageResponse(BaseModel):
     type: str
     created_at: datetime
     updated_at: datetime
+    
+    class Config:
+        orm_mode = True
 
 class ImageListResponse(BaseModel):
     success: bool
     data: List[ImageResponse]
+    
+    class Config:
+        orm_mode = True
 
 class UploadResponse(BaseModel):
     success: bool
     data: Optional[ImageResponse] = None
     error: Optional[str] = None
+    
+    class Config:
+        orm_mode = True
 
 @app.get("/")
 def read_root():
