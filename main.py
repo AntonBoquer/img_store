@@ -57,14 +57,14 @@ class JsonFileResponse(BaseModel):
     updated_at: datetime
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class JsonFileListResponse(BaseModel):
     success: bool
     data: List[JsonFileResponse]
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class UploadResponse(BaseModel):
     success: bool
@@ -72,7 +72,7 @@ class UploadResponse(BaseModel):
     error: Optional[str] = None
     
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 @app.get("/")
 def read_root():
@@ -243,3 +243,5 @@ def health_check():
         return {"status": "healthy", "database": "connected"}
     except Exception as e:
         return {"status": "unhealthy", "database": "disconnected", "error": str(e)}
+
+
