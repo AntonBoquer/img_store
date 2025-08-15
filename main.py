@@ -57,14 +57,14 @@ class JsonFileResponse(BaseModel):
     updated_at: datetime
     
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 class JsonFileListResponse(BaseModel):
     success: bool
     data: List[JsonFileResponse]
     
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 class UploadResponse(BaseModel):
     success: bool
@@ -72,7 +72,7 @@ class UploadResponse(BaseModel):
     error: Optional[str] = None
     
     class Config:
-        from_attributes = True
+        orm_mode = True
 
 @app.get("/")
 def read_root():
