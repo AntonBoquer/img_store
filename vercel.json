@@ -12,9 +12,7 @@
       "dest": "main.py"
     }
   ],
-  "functions": {
-    "main.py": {
-      "maxDuration": 30
-    }
+  "env": {
+    "PYTHONPATH": "."
   }
 } 
