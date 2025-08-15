@@ -87,9 +87,11 @@ async def upload_json_file(
     """
     Upload a JSON file and store it in the database
     """
-    # Validate file type
-    if not file.content_type or file.content_type not in ['application/json', 'text/plain']:
-        raise HTTPException(status_code=400, detail="File must be a JSON file")
+    # Validate file type - be more flexible with content type detection
+    if file.content_type and file.content_type not in ['application/json', 'text/plain']:
+        # If content type is specified but not JSON, still allow it if filename ends with .json
+        if not file.filename or not file.filename.lower().endswith('.json'):
+            raise HTTPException(status_code=400, detail="File must be a JSON file or have .json extension")
     
     # Validate file size (10MB limit)
     if file.size and file.size > 10 * 1024 * 1024:
