@@ -1,18 +1,38 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import Response
+from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Depends
+from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import psycopg2
 import os
+import json
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union
+import aiofiles
+import shutil
 from pathlib import Path
 
 # Load environment variables from .env
 load_dotenv()
 
-app = FastAPI(title="Image Store API", description="API for storing images in database")
+app = FastAPI(title="JSON Store API", description="API for storing JSON files in database")
+
+# Security token from environment variable
+SECURITY_TOKEN = os.getenv("SECURITY_TOKEN", "optional-token")
+
+def verify_token(authorization: str = Header(None)):
+    """Verify the security token (required)"""
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header required")
+    
+    if not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Invalid authorization format. Use 'Bearer <token>'")
+    
+    token = authorization.replace("Bearer ", "")
+    if token != SECURITY_TOKEN:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    return token
 
 # Database connection
 @app.on_event("startup")
@@ -27,173 +47,197 @@ def startup():
     )
     cur = conn.cursor()
 
-# ---------------------
-# Pydantic Models (v2)
-# ---------------------
-
-class ImageResponse(BaseModel):
+# Pydantic models
+class JsonFileResponse(BaseModel):
     id: str
-    name: str
+    fileName: str
+    jsonPayload: str
     size: int
-    type: str
     created_at: datetime
     updated_at: datetime
+    
+    class Config:
+        orm_mode = True
 
-    model_config = {"from_attributes": True}  # replaces orm_mode
-
-class ImageListResponse(BaseModel):
+class JsonFileListResponse(BaseModel):
     success: bool
-    data: List[ImageResponse]
-
-    model_config = {"from_attributes": True}
+    data: List[JsonFileResponse]
+    
+    class Config:
+        orm_mode = True
 
 class UploadResponse(BaseModel):
     success: bool
-    data: Optional[ImageResponse] = None
+    data: Optional[JsonFileResponse] = None
     error: Optional[str] = None
-
-    model_config = {"from_attributes": True}
-
-# ---------------------
-# Routes
-# ---------------------
+    
+    class Config:
+        orm_mode = True
 
 @app.get("/")
 def read_root():
     cur.execute("SELECT NOW();")
-    return {"time": cur.fetchone()[0], "message": "Image Store API is running"}
+    return {"time": cur.fetchone()[0], "message": "JSON Store API is running"}
 
 @app.post("/upload", response_model=UploadResponse)
-async def upload_image(file: UploadFile = File(...)):
+async def upload_json_file(
+    file: UploadFile = File(...),
+    token: str = Depends(verify_token)
+):
     """
-    Upload an image file and store it directly in the database
+    Upload a JSON file and store it in the database
     """
-    if not file.content_type or not file.content_type.startswith('image/'):
-        raise HTTPException(status_code=400, detail="File must be an image")
-
-    # NOTE: UploadFile in FastAPI does not have `size` by default.
-    # If you need file size, compute after reading.
-    file_content = await file.read()
-    file_size = len(file_content)
-
-    if file_size > 10 * 1024 * 1024:
+    # Validate file type
+    if not file.content_type or file.content_type not in ['application/json', 'text/plain']:
+        raise HTTPException(status_code=400, detail="File must be a JSON file")
+    
+    # Validate file size (10MB limit)
+    if file.size and file.size > 10 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="File size must be less than 10MB")
-
+    
     try:
+        # Generate unique ID
         file_id = str(uuid.uuid4())
-
+        
+        # Read file content
+        file_content = await file.read()
+        file_size = len(file_content)
+        
+        # Validate JSON content
+        try:
+            json_content = file_content.decode('utf-8')
+            json.loads(json_content)  # Validate JSON format
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise HTTPException(status_code=400, detail="File must contain valid JSON")
+        
+        # Store JSON data in database
         cur.execute(
             """
-            INSERT INTO images (id, name, image_data, size, type, created_at, updated_at) 
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING id, name, size, type, created_at, updated_at
+            INSERT INTO json_files (id, fileName, jsonPayload, size, created_at, updated_at) 
+            VALUES (%s, %s, %s, %s, %s, %s)
+            RETURNING id, fileName, jsonPayload, size, created_at, updated_at
             """,
             [
                 file_id,
-                file.filename or f"image_{file_id}",
-                file_content,
+                file.filename or f"json_file_{file_id}.json",
+                json_content,
                 file_size,
-                file.content_type,
                 datetime.utcnow(),
                 datetime.utcnow()
             ]
         )
-
+        
         result = cur.fetchone()
         conn.commit()
-
+        
         return UploadResponse(
             success=True,
-            data=ImageResponse(
+            data=JsonFileResponse(
                 id=result[0],
-                name=result[1],
-                size=result[2],
-                type=result[3],
+                fileName=result[1],
+                jsonPayload=result[2],
+                size=result[3],
                 created_at=result[4],
                 updated_at=result[5]
             )
         )
-
+        
     except Exception as e:
         print(f"Upload error: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
-@app.get("/images", response_model=ImageListResponse)
-async def get_images():
+@app.get("/json-files", response_model=JsonFileListResponse)
+async def get_json_files(token: str = Depends(verify_token)):
+    """
+    Get all stored JSON files metadata
+    """
     try:
         cur.execute(
             """
-            SELECT id, name, size, type, created_at, updated_at 
-            FROM images 
+            SELECT id, fileName, jsonPayload, size, created_at, updated_at 
+            FROM json_files 
             ORDER BY created_at DESC
             """
         )
+        
         results = cur.fetchall()
-
-        images = [
-            ImageResponse(
+        json_files = []
+        
+        for row in results:
+            json_files.append(JsonFileResponse(
                 id=row[0],
-                name=row[1],
-                size=row[2],
-                type=row[3],
+                fileName=row[1],
+                jsonPayload=row[2],
+                size=row[3],
                 created_at=row[4],
                 updated_at=row[5]
-            )
-            for row in results
-        ]
-
-        return ImageListResponse(success=True, data=images)
-
+            ))
+        
+        return JsonFileListResponse(success=True, data=json_files)
+        
     except Exception as e:
         print(f"Database error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to fetch images")
+        raise HTTPException(status_code=500, detail="Failed to fetch JSON files")
 
-@app.get("/images/{image_id}")
-async def get_image(image_id: str):
+@app.get("/json-files/{file_id}")
+async def get_json_file(file_id: str, token: str = Depends(verify_token)):
+    """
+    Get the actual JSON file content by ID
+    """
     try:
         cur.execute(
-            "SELECT name, image_data, type FROM images WHERE id = %s",
-            [image_id]
+            "SELECT fileName, jsonPayload FROM json_files WHERE id = %s", 
+            [file_id]
         )
         result = cur.fetchone()
-
+        
         if not result:
-            raise HTTPException(status_code=404, detail="Image not found")
-
-        name, image_data, content_type = result
-
+            raise HTTPException(status_code=404, detail="JSON file not found")
+        
+        fileName, jsonPayload = result
+        
         return Response(
-            content=bytes(image_data),
-            media_type=content_type,
-            headers={"Content-Disposition": f"inline; filename={name}"}
+            content=jsonPayload,
+            media_type="application/json",
+            headers={"Content-Disposition": f"inline; filename={fileName}"}
         )
-
+        
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Get image error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to retrieve image")
+        print(f"Get JSON file error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve JSON file")
 
-@app.delete("/images/{image_id}")
-async def delete_image(image_id: str):
+@app.delete("/json-files/{file_id}")
+async def delete_json_file(file_id: str, token: str = Depends(verify_token)):
+    """
+    Delete a JSON file by ID
+    """
     try:
-        cur.execute("SELECT id FROM images WHERE id = %s", [image_id])
-        if not cur.fetchone():
-            raise HTTPException(status_code=404, detail="Image not found")
-
-        cur.execute("DELETE FROM images WHERE id = %s", [image_id])
+        # Check if file exists
+        cur.execute("SELECT id FROM json_files WHERE id = %s", [file_id])
+        result = cur.fetchone()
+        
+        if not result:
+            raise HTTPException(status_code=404, detail="JSON file not found")
+        
+        # Delete from database
+        cur.execute("DELETE FROM json_files WHERE id = %s", [file_id])
         conn.commit()
-
-        return {"success": True, "message": "Image deleted successfully"}
-
+        
+        return {"success": True, "message": "JSON file deleted successfully"}
+        
     except HTTPException:
         raise
     except Exception as e:
         print(f"Delete error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to delete image")
+        raise HTTPException(status_code=500, detail="Failed to delete JSON file")
 
 @app.get("/health")
 def health_check():
+    """
+    Health check endpoint
+    """
     try:
         cur.execute("SELECT 1")
         return {"status": "healthy", "database": "connected"}
